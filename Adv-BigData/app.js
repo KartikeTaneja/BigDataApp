@@ -286,10 +286,7 @@ app.post('/data', authenticateToken, async (req, res, next) => {
         const etag = crypto.createHash('md5').update(JSON.stringify(dataToStore)).digest('hex');
 
         res.setHeader('ETag', etag);
-        res.status(201).json({
-            message: 'Data stored successfully',
-            objectId: objectId
-        });
+        res.status(201).json(dataToStore);
     } catch (error) {
         next(error);
     }
@@ -334,210 +331,70 @@ app.get('/data/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// // PUT: Replace Data
-// app.put('/data/:id', authenticateToken, async (req, res, next) => {
-//     try {
-//         const { id } = req.params;
-//         const existingData = await redisClient.get(id);
-        
-//         if (!existingData) {
-//             return res.status(404).json({
-//                 error: 'Not Found',
-//                 message: `No data found for id '${id}'`
-//             });
-//         }
-        
-//         const parsedExisting = JSON.parse(existingData);
-//         const currentEtag = crypto.createHash('md5').update(existingData).digest('hex');
-        
-//         // Conditional update - If-Match
-//         if (req.headers['if-match'] && req.headers['if-match'] !== currentEtag) {
-//             return res.status(412).json({
-//                 error: 'Precondition Failed',
-//                 message: 'Resource has been modified since last retrieval'
-//             });
-//         }
-
-//         // Type validation
-//         const typeErrors = validateTypes(req.body);
-//         if (typeErrors.length > 0) {
-//             return res.status(400).json({
-//                 error: 'Type Validation Failed',
-//                 details: typeErrors
-//             });
-//         }
-
-//         // Schema validation
-//         const validate = ajv.compile(schema);
-//         if (!validate(req.body)) {
-//             return res.status(400).json({
-//                 error: 'Schema Validation Failed',
-//                 details: validate.errors.map(error => ({
-//                     path: error.instancePath || '/',
-//                     message: error.message,
-//                     keyword: error.keyword,
-//                     params: error.params
-//                 }))
-//             });
-//         }
-
-//         // Ensure objectId in request body matches URL parameter
-//         if (req.body.objectId !== id) {
-//             return res.status(400).json({
-//                 error: 'Bad Request',
-//                 message: 'objectId in request body must match URL parameter'
-//             });
-//         }
-
-//         // Store data with updated metadata
-//         const dataToStore = {
-//             ...req.body,
-//             _metadata: {
-//                 ...parsedExisting._metadata,
-//                 updatedBy: req.user.sub || req.user.email,
-//                 updatedAt: new Date().toISOString(),
-//                 version: (parsedExisting._metadata?.version || 0) + 1
-//             }
-//         };
-
-//         await redisClient.set(id, JSON.stringify(dataToStore));
-
-//         // Generate new ETag for the updated resource
-//         const newEtag = crypto.createHash('md5').update(JSON.stringify(dataToStore)).digest('hex');
-
-//         res.setHeader('ETag', newEtag);
-//         res.status(200).json({
-//             message: 'Data updated successfully',
-//             objectId: id
-//         });
-//     } catch (error) {
-//         next(error);
-//     }
-// });
 
 // PATCH: Partial Update/Merge Data
 app.patch('/data/:id', authenticateToken, async (req, res, next) => {
     try {
+        if (!req.body || Object.keys(req.body).length === 0) {
+            return res.status(400).json({ error: 'Bad Request', message: 'No JSON body received' });
+        }
+
         const { id } = req.params;
+        console.log(`PATCH /data/${id} called with body:`, req.body);
+ 
         const existingData = await redisClient.get(id);
-        
         if (!existingData) {
             return res.status(404).json({
                 error: 'Not Found',
                 message: `No data found for id '${id}'`
             });
         }
-        
+ 
         const parsedExisting = JSON.parse(existingData);
+        console.log(`Existing data for id ${id}:`, parsedExisting);
+ 
         const currentEtag = crypto.createHash('md5').update(existingData).digest('hex');
-        
-        // Conditional update - If-Match
+ 
         if (req.headers['if-match'] && req.headers['if-match'] !== currentEtag) {
             return res.status(412).json({
                 error: 'Precondition Failed',
                 message: 'Resource has been modified since last retrieval'
             });
         }
-
-        // Determine merge strategy based on content type
-        let updatedData;
-        
-        if (req.is('application/merge-patch+json')) {
-            // RFC 7396 JSON Merge Patch - Use deep merge
-            // Save original metadata
-            const metadata = parsedExisting._metadata;
-            
-            // Remove metadata before merging
-            const dataWithoutMetadata = { ...parsedExisting };
-            delete dataWithoutMetadata._metadata;
-            
-            // Perform deep merge
-            updatedData = deepMerge(dataWithoutMetadata, req.body);
-            
-            // Restore metadata
-            updatedData._metadata = metadata;
-        } else {
-            // JSON Patch
-            updatedData = jsonpatch.applyPatch(
-                parsedExisting, 
-                req.body
-            ).newDocument;
-        }
-
-        // Exclude _metadata from validation
-        const dataForValidation = { ...updatedData };
-        delete dataForValidation._metadata;
-
-        // Type validation
-        const typeErrors = validateTypes(dataForValidation);
-        if (typeErrors.length > 0) {
-            return res.status(400).json({
-                error: 'Type Validation Failed',
-                details: typeErrors
-            });
-        }
-
-        // Schema validation
-        const validate = ajv.compile(schema);
-        if (!validate(dataForValidation)) {
-            return res.status(400).json({
-                error: 'Schema Validation Failed',
-                details: validate.errors.map(error => ({
-                    path: error.instancePath || '/',
-                    message: error.message,
-                    keyword: error.keyword,
-                    params: error.params
-                }))
-            });
-        }
-
-        // Update metadata
-        updatedData._metadata = {
-            ...parsedExisting._metadata,
-            updatedBy: req.user.sub || req.user.email,
-            updatedAt: new Date().toISOString(),
-            version: (parsedExisting._metadata?.version || 0) + 1
+ 
+        // Overwrite fields with new values
+        const updatedData = { 
+            ...parsedExisting, 
+            ...req.body, 
+            _metadata: {
+                ...parsedExisting._metadata,
+                updatedBy: req.user.sub || req.user.email,
+                updatedAt: new Date().toISOString(),
+                version: (parsedExisting._metadata?.version || 0) + 1
+            }
         };
-
-        // Store updated data
-        await redisClient.set(id, JSON.stringify(updatedData));
-
-        // Generate new ETag for the updated resource
+ 
+        console.log('Updated data before saving:', updatedData);
+ 
+        // Save to Redis
+        const redisSetResult = await redisClient.set(id, JSON.stringify(updatedData));
+        console.log('Redis set result:', redisSetResult); // Should log 'OK'
+ 
+        // Verify data persistence
+        const verifySave = await redisClient.get(id);
+        console.log('Data in Redis after save:', JSON.parse(verifySave));
+ 
+        // Generate new ETag
         const newEtag = crypto.createHash('md5').update(JSON.stringify(updatedData)).digest('hex');
-
+ 
         res.setHeader('ETag', newEtag);
-        res.status(200).json({
-            message: 'Data updated successfully',
-            objectId: id
-        });
+        res.status(200).json(updatedData);
     } catch (error) {
+        console.error('Error in PATCH:', error);
         next(error);
     }
 });
 
-// Deep merge helper function
-function deepMerge(target, source) {
-    const output = { ...target };
-    
-    if (isObject(target) && isObject(source)) {
-        Object.keys(source).forEach(key => {
-            if (isObject(source[key])) {
-                if (!(key in target)) {
-                    Object.assign(output, { [key]: source[key] });
-                } else {
-                    output[key] = deepMerge(target[key], source[key]);
-                }
-            } else if (Array.isArray(source[key])) {
-                // For arrays, replace the entire array
-                output[key] = [...source[key]];
-            } else {
-                Object.assign(output, { [key]: source[key] });
-            }
-        });
-    }
-    
-    return output;
-}
 
 function isObject(item) {
     return (item && typeof item === 'object' && !Array.isArray(item));
