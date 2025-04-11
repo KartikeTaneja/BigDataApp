@@ -292,7 +292,7 @@ app.post('/data', authenticateToken, async (req, res, next) => {
     }
 });
 
-// GET: Retrieve Data
+// GET: Retrieve Data with specific user
 app.get('/data/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
@@ -330,6 +330,37 @@ app.get('/data/:id', authenticateToken, async (req, res) => {
         next(error);
     }
 });
+
+// GET: Retrieve all data
+app.get('/data', authenticateToken, async (req, res, next) => {
+    try {
+        const keys = await redisClient.keys('*'); // Get all keys in Redis
+        if (keys.length === 0) {
+            return res.status(404).json({
+                error: 'Not Found',
+                message: 'No data found'
+            });
+        }
+
+        const dataPromises = keys.map(async (key) => {
+            const data = await redisClient.get(key);
+            try {
+                return JSON.parse(data); // Try parsing as JSON
+            } catch (e) {
+                return { error: 'Invalid JSON', message: `Data for key '${key}' is not valid JSON` };
+            }
+        });
+
+        const allData = await Promise.all(dataPromises);
+
+        res.status(200).json(allData);
+    } catch (error) {
+        next(error);
+    }
+});
+
+
+
 
 
 // PATCH: Partial Update/Merge Data
